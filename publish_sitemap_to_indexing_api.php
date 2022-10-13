@@ -6,8 +6,8 @@ $sitemapOrIndexUrls = [];
 
 //制限事項 // https://developers.google.com/search/apis/indexing-api/v3/quota-pricing
 //1分以内に60回以上投げてはいけないので間隔をあける
-$intervalSecondsPerAPI = 2;
-//1日で投げられるAPIの上限
+$intervalSecondsPerAPI = 1;
+//1日で投げられるAPIの上限(自分の上限に合わせて増やしてOK)
 $limitPublishPerDay = 200;
 
 require_once './vendor/autoload.php';
@@ -24,7 +24,7 @@ if(empty($sitemapOrIndexUrls)){
 }
 
 //URLからサイトマップ取りに行くところ
-$options = ['exceptions' => false,'debug' => false];
+$options = ['http_errors' => false, 'debug' => false, 'verify'=>false, ];
 $http = new GuzzleHttp\Client($options);
 
 $list = [];
@@ -32,7 +32,15 @@ $list = [];
 do{
     $url = array_shift($sitemapOrIndexUrls);
     echo '-getting XML >> ' . $url . PHP_EOL;
-    $urlSet = readSitemapXml($http, $url);
+
+    $response = $http->request('GET', $url);
+    if($response->getStatusCode() != 200){
+        echo ' skip because status code (' . $response->getStatusCode() . ') is not valid.' . PHP_EOL;
+        continue;
+    }
+
+    $body = $response->getBody()->getContents();
+    $urlSet = new SimpleXMLElement($body);
     echo ' got ' . count($urlSet) . ' entries.' . PHP_EOL;
 
     foreach($urlSet as $name=>$data){
@@ -66,7 +74,7 @@ echo '============' . PHP_EOL;
 $client = new Google_Client();
 $client->setAuthConfig($credentialFile);
 $client->addScope(Google_Service_Indexing::INDEXING);
-$httpClient = $client->authorize();
+$httpClient = $client->authorize($http);
 $endpoint = 'https://indexing.googleapis.com/v3/urlNotifications:publish';
 
 $results = [];
@@ -86,7 +94,10 @@ foreach($list as $n=>$sitemap){
     $status = $response->getStatusCode();
     $results[$status] = ($results[$status]??0) + 1;
 
-    if($status==200){
+    if($status == 429 ){
+        echo 'reached api limitation.' . PHP_EOL;
+        break;
+    }else if($status==200){
         $time = toJST($json["urlNotificationMetadata"]["latestUpdate"]["notifyTime"]);
         echo $status . ':' . $response->getReasonPhrase() . '|' . $sitemap['loc'] . '|' .$time .PHP_EOL;
     }else{
@@ -103,13 +114,6 @@ foreach($results as $status=>$count){
 }
 echo '==============' . PHP_EOL;
 
-
-function readSitemapXml($http, $url){
-    $response = $http->request('GET', $url);
-    $body = $response->getBody()->getContents();
-    $xml = new SimpleXMLElement($body);
-    return $xml;
-}
 
 //Google APIのタイムスタンプがnano秒まであるので正規表現で削り取る
 function toJST($datetime){
